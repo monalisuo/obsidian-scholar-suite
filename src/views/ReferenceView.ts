@@ -312,6 +312,41 @@ export class ReferenceView extends ItemView {
     } finally {
       this.isLoading = false;
       this.render();
+      if (this.isZoteroReady) {
+        this.checkZoteroStatusForItems(this.references);
+        this.checkZoteroStatusForItems(this.citations);
+      }
+    }
+  }
+
+  private async checkZoteroStatusForItems(items: (ReferenceItem | CitationItem)[]): Promise<void> {
+    if (!this.isZoteroReady || !items || items.length === 0) return;
+    const candidates = items.filter((it) => !it.inVault && !it.inZotero);
+    if (candidates.length === 0) return;
+
+    const chunkSize = 4;
+    for (let i = 0; i < candidates.length; i += chunkSize) {
+      const chunk = candidates.slice(i, i + chunkSize);
+      let changed = false;
+      await Promise.all(
+        chunk.map(async (item) => {
+          try {
+            const res = await this.plugin.zoteroLocalClient.checkItemInZotero({
+              doi: item.doi,
+              title: item.title,
+              zhTitle: item.zhTitle,
+            });
+            if (res.inZotero) {
+              item.inZotero = true;
+              item.zoteroKey = res.zoteroKey;
+              changed = true;
+            }
+          } catch {}
+        })
+      );
+      if (changed) {
+        this.render();
+      }
     }
   }
 
@@ -748,6 +783,8 @@ export class ReferenceView extends ItemView {
       zoteroPill.innerText = this.isZoteroReady ? "🟢 Zotero: 已连接" : "⚪ Zotero: 未检测到";
       if (this.isZoteroReady) {
         new Notice("Zotero 桌面端已连接 (23119 端口)，已解锁本地文库秒级匹配与一键入库！");
+        this.checkZoteroStatusForItems(this.references);
+        this.checkZoteroStatusForItems(this.citations);
       } else {
         new Notice("未检测到 Zotero，请确认 Zotero 桌面端是否正在运行。");
       }
@@ -873,20 +910,26 @@ export class ReferenceView extends ItemView {
     // 3. Tab switch (References vs Citations)
     const tabsContainer = wrapper.createDiv({ cls: "scholar-tabs-container" });
     const refInVaultCount = this.references.filter((r) => r.inVault).length;
+    const refInZoteroCount = this.references.filter((r) => !r.inVault && r.inZotero).length;
+    const totalRefInLib = refInVaultCount + refInZoteroCount;
     const refTab = tabsContainer.createDiv({
       cls: `scholar-tab ${this.activeTab === "references" ? "active" : ""}`,
-      text: `参考文献 (${this.references.length}) [在库: ${refInVaultCount}]`,
+      text: `参考文献 (${this.references.length}) [在库: ${totalRefInLib}]`,
     });
+    refTab.title = `在库合计 ${totalRefInLib} 篇（Obsidian笔记: ${refInVaultCount} 篇，Zotero收录: ${refInZoteroCount} 篇）`;
     refTab.onclick = () => {
       this.activeTab = "references";
       this.render();
     };
 
     const citeInVaultCount = this.citations.filter((c) => c.inVault).length;
+    const citeInZoteroCount = this.citations.filter((c) => !c.inVault && c.inZotero).length;
+    const totalCiteInLib = citeInVaultCount + citeInZoteroCount;
     const citeTab = tabsContainer.createDiv({
       cls: `scholar-tab ${this.activeTab === "citations" ? "active" : ""}`,
-      text: `引证文献 (${this.citations.length}) [在库: ${citeInVaultCount}]`,
+      text: `引证文献 (${this.citations.length}) [在库: ${totalCiteInLib}]`,
     });
+    citeTab.title = `在库合计 ${totalCiteInLib} 篇（Obsidian笔记: ${citeInVaultCount} 篇，Zotero收录: ${citeInZoteroCount} 篇）`;
     citeTab.onclick = () => {
       this.activeTab = "citations";
       this.render();

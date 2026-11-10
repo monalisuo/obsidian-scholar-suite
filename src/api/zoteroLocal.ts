@@ -63,6 +63,7 @@ function nodeRequest(options: {
 
 export class ZoteroLocalClient {
   private port: number;
+  private checkedCache: Map<string, { inZotero: boolean; zoteroKey?: string }> = new Map();
 
   constructor(port: number = 23119) {
     this.port = port;
@@ -109,6 +110,113 @@ export class ZoteroLocalClient {
     } catch {}
 
     return false;
+  }
+
+  private cleanTitle(title: string): string {
+    return title
+      .toLowerCase()
+      .replace(/[^a-z0-9\u4e00-\u9fa5]/g, "")
+      .trim();
+  }
+
+  /**
+   * Fast check if a paper exists in local Zotero library (Zero Auth / Local Read API)
+   */
+  public async checkItemInZotero(paper: {
+    doi?: string;
+    title?: string;
+    zhTitle?: string;
+  }): Promise<{ inZotero: boolean; zoteroKey?: string }> {
+    const cleanDoi = paper.doi ? paper.doi.trim().toLowerCase().replace(/^https?:\/\/(dx\.)?doi\.org\//, "") : "";
+    const rawTitle = paper.zhTitle || paper.title || "";
+    const cacheKey = cleanDoi || this.cleanTitle(rawTitle);
+
+    if (!cacheKey || cacheKey.length < 3) {
+      return { inZotero: false };
+    }
+
+    if (this.checkedCache.has(cacheKey)) {
+      return this.checkedCache.get(cacheKey)!;
+    }
+
+    try {
+      let items: any[] = [];
+
+      // 1. If DOI exists, search by DOI first with qmode=everything
+      if (cleanDoi) {
+        const qDoi = encodeURIComponent(cleanDoi);
+        const path = `/api/users/0/items?q=${qDoi}&qmode=everything&limit=5`;
+        try {
+          const res = await nodeRequest({
+            port: this.port,
+            path,
+            method: "GET",
+            timeoutMs: 1500,
+          });
+          if (res.status === 200 && Array.isArray(res.json)) {
+            items = res.json;
+          }
+        } catch {}
+      }
+
+      // 2. If no items found by DOI, search by title keyword
+      if (items.length === 0 && rawTitle && rawTitle.trim().length >= 4) {
+        // Extract 2-3 prominent title words or first 25 chars for search
+        const qWords = rawTitle
+          .replace(/[\[\]【】\(\)（）"':：_—–-]/g, " ")
+          .trim()
+          .split(/\s+/)
+          .filter((w) => w.length >= 3)
+          .slice(0, 3)
+          .join(" ");
+
+        const queryTerm = qWords.length >= 3 ? qWords : rawTitle.substring(0, 25);
+        const q = encodeURIComponent(queryTerm);
+        const path = `/api/users/0/items?q=${q}&qmode=everything&limit=8`;
+
+        try {
+          const res = await nodeRequest({
+            port: this.port,
+            path,
+            method: "GET",
+            timeoutMs: 1800,
+          });
+          if (res.status === 200 && Array.isArray(res.json)) {
+            items = res.json;
+          }
+        } catch {}
+      }
+
+      // Check matched items
+      const targetNorm = this.cleanTitle(rawTitle);
+      for (const it of items) {
+        const data = it.data || {};
+        const itDoi = (data.DOI || "").trim().toLowerCase();
+        const itTitle = this.cleanTitle(data.title || "");
+
+        // Match condition 1: DOI matches
+        if (cleanDoi && itDoi && (itDoi === cleanDoi || itDoi.includes(cleanDoi) || cleanDoi.includes(itDoi))) {
+          const result = { inZotero: true, zoteroKey: it.key || data.key };
+          this.checkedCache.set(cacheKey, result);
+          return result;
+        }
+
+        // Match condition 2: Title exact match or substring
+        if (targetNorm.length >= 6 && itTitle.length >= 6) {
+          if (itTitle === targetNorm || itTitle.includes(targetNorm) || targetNorm.includes(itTitle)) {
+            const result = { inZotero: true, zoteroKey: it.key || data.key };
+            this.checkedCache.set(cacheKey, result);
+            return result;
+          }
+        }
+      }
+    } catch (e) {
+      // Zotero offline
+    }
+
+    const notFound = { inZotero: false };
+    this.checkedCache.set(cacheKey, notFound);
+    return notFound;
   }
 
   /**
@@ -169,6 +277,9 @@ export class ZoteroLocalClient {
       });
 
       if (res.status === 200 || res.status === 201) {
+        // Cache mark as in Zotero
+        const cacheKey = cleanDoi || this.cleanTitle(rawTitle);
+        this.checkedCache.set(cacheKey, { inZotero: true });
         return { success: true };
       }
     } catch {}
@@ -183,6 +294,8 @@ export class ZoteroLocalClient {
       });
 
       if (res.status === 200 || res.status === 201) {
+        const cacheKey = cleanDoi || this.cleanTitle(rawTitle);
+        this.checkedCache.set(cacheKey, { inZotero: true });
         return { success: true };
       }
       return { success: false, message: `HTTP ${res.status}` };
@@ -207,8 +320,9 @@ export class ZoteroLocalClient {
         .replace(/\s+/g, " ")
         .trim();
 
-      const q = encodeURIComponent(cleanTitle.substring(0, 50));
-      const path = `/api/users/0/items?q=${q}&limit=5`;
+      const searchTerm = doi || cleanTitle.substring(0, 50);
+      const q = encodeURIComponent(searchTerm);
+      const path = `/api/users/0/items?q=${q}&qmode=everything&limit=5`;
 
       let items: any[] = [];
 

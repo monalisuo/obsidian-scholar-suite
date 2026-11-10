@@ -1,6 +1,6 @@
 {
   "name": "obsidian-scholar-suite",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Zotero-Reference style literature citation graph with vault cross-matching, plus multimodal PDF-to-MD quality review & formatting toolkit.",
   "main": "main.js",
   "scripts": {

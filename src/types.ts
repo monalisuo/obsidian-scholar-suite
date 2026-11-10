@@ -35,6 +35,8 @@ export interface ReferenceItem {
   abstractZh?: string;
   abstractSource?: string;
   inVault: boolean;
+  inZotero?: boolean;
+  zoteroKey?: string;
   vaultFile?: TFile;
   vaultPath?: string;
   vaultTitle?: string;
@@ -57,6 +59,8 @@ export interface CitationItem {
   citationCount?: number;
   isInfluential?: boolean;
   inVault: boolean;
+  inZotero?: boolean;
+  zoteroKey?: string;
   vaultFile?: TFile;
   vaultPath?: string;
   vaultTitle?: string;

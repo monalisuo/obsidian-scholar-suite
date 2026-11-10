@@ -1,7 +1,7 @@
 {
   "id": "obsidian-scholar-suite",
   "name": "Scholar Suite: Literature Reference & Multimodal Review",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "0.15.0",
   "description": "Zotero-Reference style literature citation graph with vault cross-matching, plus multimodal PDF-to-MD quality review & formatting toolkit.",
   "author": "monalisuo",

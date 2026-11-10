@@ -21,29 +21,73 @@ export class PaperCard {
       titleWrapper.createSpan({ cls: "scholar-index-tag", text: `[${item.index}]` });
     }
 
-    const titleEl = titleWrapper.createSpan({
-      cls: `scholar-paper-title ${item.inVault ? "scholar-title-linked" : ""}`,
-      text: item.title,
-    });
+    const titleContainer = titleWrapper.createDiv({ cls: "scholar-paper-title-container" });
 
-    if (item.inVault && item.vaultFile) {
-      titleEl.title = `点击在编辑区打开: ${item.vaultFile.basename}`;
-      titleEl.onclick = async () => {
-        await app.workspace.getLeaf(false).openFile(item.vaultFile!);
-      };
-    }
+    const renderTitle = () => {
+      titleContainer.empty();
 
-    const badgeEl = headerEl.createEl("span", {
-      cls: `scholar-vault-badge ${item.inVault ? "scholar-badge-in-vault" : "scholar-badge-missing"}`,
-      text: item.inVault ? "已在库中" : "未收录",
-    });
+      if (item.zhTitle && item.zhTitle !== item.title) {
+        // Bilingual Title: Chinese translated title prominent, English original below
+        const zhTitleEl = titleContainer.createDiv({
+          cls: `scholar-paper-title scholar-paper-title-zh ${item.inVault ? "scholar-title-linked" : ""}`,
+          text: `【译】${item.zhTitle}`,
+        });
+        const origTitleEl = titleContainer.createDiv({
+          cls: "scholar-paper-title-sub",
+          text: item.title,
+        });
 
-    if (item.inVault && item.vaultFile) {
-      badgeEl.title = item.vaultFile.path;
-      badgeEl.onclick = async () => {
-        await app.workspace.getLeaf(false).openFile(item.vaultFile!);
-      };
-    }
+        if (item.inVault && item.vaultFile) {
+          zhTitleEl.title = `点击在编辑区打开: ${item.vaultFile.basename}`;
+          origTitleEl.title = `点击在编辑区打开: ${item.vaultFile.basename}`;
+          const openAction = async () => {
+            await app.workspace.getLeaf(false).openFile(item.vaultFile!);
+          };
+          zhTitleEl.onclick = openAction;
+          origTitleEl.onclick = openAction;
+        }
+      } else {
+        const titleEl = titleContainer.createSpan({
+          cls: `scholar-paper-title ${item.inVault ? "scholar-title-linked" : ""}`,
+          text: item.title,
+        });
+
+        if (item.inVault && item.vaultFile) {
+          titleEl.title = `点击在编辑区打开: ${item.vaultFile.basename}`;
+          titleEl.onclick = async () => {
+            await app.workspace.getLeaf(false).openFile(item.vaultFile!);
+          };
+        }
+      }
+    };
+    renderTitle();
+
+    // Status Badge: inVault (green) > inZotero (purple) > missing (gray)
+    const badgeEl = headerEl.createEl("span", { cls: "scholar-vault-badge" });
+    const updateBadge = () => {
+      badgeEl.empty();
+      if (item.inVault) {
+        badgeEl.className = "scholar-vault-badge scholar-badge-in-vault";
+        badgeEl.innerText = "已在库中";
+        badgeEl.title = item.vaultFile ? `笔记文件: ${item.vaultFile.path}` : "本地 Obsidian 库中已存在此笔记";
+        badgeEl.onclick = async () => {
+          if (item.vaultFile) {
+            await app.workspace.getLeaf(false).openFile(item.vaultFile);
+          }
+        };
+      } else if (item.inZotero) {
+        badgeEl.className = "scholar-vault-badge scholar-badge-zotero";
+        badgeEl.innerText = "Zotero已收";
+        badgeEl.title = "Zotero 桌面端已收录该文献";
+        badgeEl.onclick = null;
+      } else {
+        badgeEl.className = "scholar-vault-badge scholar-badge-missing";
+        badgeEl.innerText = "未收录";
+        badgeEl.title = "本地笔记与 Zotero 均未收录";
+        badgeEl.onclick = null;
+      }
+    };
+    updateBadge();
 
     // Meta line: Authors, Year, Journal, Citation count, Journal Rank Badges
     const metaEl = card.createDiv({ cls: "scholar-paper-meta" });
@@ -101,10 +145,10 @@ export class PaperCard {
     // Actions row
     const actionsEl = card.createDiv({ cls: "scholar-paper-actions" });
 
-    // 1. Abstract Toggle Button
-    const abstractToggleBtn = actionsEl.createEl("button", {
+    // 1. One-click Fetch Abstract & Translate (Unified)
+    const abstractBtn = actionsEl.createEl("button", {
       cls: "scholar-action-btn scholar-abstract-toggle-btn",
-      text: "📄 查看摘要",
+      text: item.abstract ? "📄 查看摘要" : "🌐 抓取摘要并翻译",
     });
 
     let isAbstractOpen = false;
@@ -126,7 +170,7 @@ export class PaperCard {
         });
       }
 
-      const textEl = absBox.createDiv({
+      absBox.createDiv({
         cls: "scholar-abstract-text",
         text: item.abstractZh || item.abstract || "暂无摘要",
       });
@@ -143,7 +187,7 @@ export class PaperCard {
         new Notice("摘要已复制到剪贴板！");
       };
 
-      // Translate Abstract (if English)
+      // Translate / Revert toggle
       const isEnglish = item.abstract && !/[\u4e00-\u9fa5]/.test(item.abstract.substring(0, 40));
       if (item.abstract && isEnglish && !item.abstractZh) {
         const transBtn = absTools.createEl("button", {
@@ -162,14 +206,23 @@ export class PaperCard {
             new Notice("翻译服务暂时不可用，请检查网络连接");
           }
         };
-      } else if (item.abstractZh) {
+      } else if (item.abstractZh && item.abstract && item.abstract !== item.abstractZh) {
         const revertBtn = absTools.createEl("button", {
           cls: "scholar-sub-btn",
           text: "🔤 显示英文原文",
         });
         revertBtn.onclick = () => {
-          item.abstractZh = undefined;
-          renderAbstractBox();
+          const showingZh = absTools.getAttribute("data-showing") !== "en";
+          const textEl = absBox.querySelector(".scholar-abstract-text");
+          if (showingZh) {
+            if (textEl) textEl.textContent = item.abstract!;
+            revertBtn.innerText = "🌐 显示中文译文";
+            absTools.setAttribute("data-showing", "en");
+          } else {
+            if (textEl) textEl.textContent = item.abstractZh!;
+            revertBtn.innerText = "🔤 显示英文原文";
+            absTools.setAttribute("data-showing", "zh");
+          }
         };
       }
 
@@ -182,17 +235,22 @@ export class PaperCard {
         item.abstract = undefined;
         item.abstractZh = undefined;
         item.abstractSource = undefined;
-        await fetchAbstractData();
+        await fetchAbstractAndTranslate();
       };
     };
 
-    const fetchAbstractData = async () => {
+    const fetchAbstractAndTranslate = async () => {
       abstractContainer.empty();
+      abstractContainer.style.display = "block";
+      abstractBtn.innerText = "📄 收起摘要";
+      isAbstractOpen = true;
+
       const loadingEl = abstractContainer.createDiv({
         cls: "scholar-abstract-loading",
-        text: "正在全域知识网络检索摘要 (本地笔记 / Zotero / 知网CNKI / Crossref / OpenAlex)...",
+        text: "正在全域检索并自动翻译 (本地笔记 / Zotero / 知网CNKI / Crossref / OpenAlex)...",
       });
 
+      // 1. Fetch Abstract
       const result = await AbstractHelper.fetchAbstractUnified(app, plugin, item);
 
       if (result && result.abstract) {
@@ -208,8 +266,42 @@ export class PaperCard {
           item.doi = result.doi;
         }
         updateMetaText();
+
+        // 2. Auto-translate abstract if in English
+        const isEnglishAbs = !/[\u4e00-\u9fa5]/.test(result.abstract.substring(0, 50));
+        if (isEnglishAbs && !item.abstractZh) {
+          loadingEl.innerText = "正在智能翻译摘要及标题...";
+          const [zhAbs, zhTitle] = await Promise.all([
+            AbstractHelper.translateText(result.abstract),
+            !item.zhTitle && isEnglishTitle ? AbstractHelper.translateText(item.title) : Promise.resolve(null),
+          ]);
+          if (zhAbs) item.abstractZh = zhAbs;
+          if (zhTitle) {
+            item.zhTitle = zhTitle;
+            renderTitle();
+          }
+        } else if (!item.zhTitle && isEnglishTitle) {
+          // Translate title if not done
+          AbstractHelper.translateText(item.title).then((zhTitle) => {
+            if (zhTitle) {
+              item.zhTitle = zhTitle;
+              renderTitle();
+            }
+          });
+        }
+
         renderAbstractBox();
       } else {
+        // If abstract not found, still try to translate title if English
+        if (!item.zhTitle && isEnglishTitle) {
+          AbstractHelper.translateText(item.title).then((zhTitle) => {
+            if (zhTitle) {
+              item.zhTitle = zhTitle;
+              renderTitle();
+            }
+          });
+        }
+
         abstractContainer.empty();
         const errBox = abstractContainer.createDiv({ cls: "scholar-abstract-box" });
         errBox.createDiv({
@@ -217,7 +309,6 @@ export class PaperCard {
           text: "未在本地库、Zotero、Crossref 或 OpenAlex 中检索到该文献的公开摘要。",
         });
 
-        // Offer direct search link
         const targetQ = item.zhTitle || item.title;
         const isZh = /[\u4e00-\u9fa5]/.test(targetQ);
         const searchUrl = isZh
@@ -233,24 +324,58 @@ export class PaperCard {
       }
     };
 
-    abstractToggleBtn.onclick = async () => {
+    abstractBtn.onclick = async () => {
       isAbstractOpen = !isAbstractOpen;
       if (isAbstractOpen) {
         abstractContainer.style.display = "block";
-        abstractToggleBtn.innerText = "📄 收起摘要";
+        abstractBtn.innerText = "📄 收起摘要";
 
         if (!item.abstract) {
-          await fetchAbstractData();
+          await fetchAbstractAndTranslate();
         } else {
+          // If already has English abstract but no translation, auto translate
+          const isEnglishAbs = item.abstract && !/[\u4e00-\u9fa5]/.test(item.abstract.substring(0, 40));
+          if (isEnglishAbs && !item.abstractZh) {
+            AbstractHelper.translateText(item.abstract).then((zh) => {
+              if (zh) {
+                item.abstractZh = zh;
+                renderAbstractBox();
+              }
+            });
+          }
           renderAbstractBox();
         }
       } else {
         abstractContainer.style.display = "none";
-        abstractToggleBtn.innerText = "📄 查看摘要";
+        abstractBtn.innerText = item.abstract ? "📄 查看摘要" : "🌐 抓取摘要并翻译";
       }
     };
 
-    // 2. One-click create note
+    // 2. Translate Title Button (if English title)
+    const isEnglishTitle = item.title && !/[\u4e00-\u9fa5]/.test(item.title);
+    if (isEnglishTitle && !item.zhTitle) {
+      const transTitleBtn = actionsEl.createEl("button", {
+        cls: "scholar-action-btn scholar-trans-title-btn",
+        text: "🔤 翻译标题",
+      });
+      transTitleBtn.title = "将英文论文标题一键翻译为中文";
+      transTitleBtn.onclick = async () => {
+        transTitleBtn.innerText = "正在翻译...";
+        transTitleBtn.disabled = true;
+        const zh = await AbstractHelper.translateText(item.title);
+        if (zh) {
+          item.zhTitle = zh;
+          renderTitle();
+          transTitleBtn.remove();
+          new Notice(`标题已翻译: ${zh}`);
+        } else {
+          transTitleBtn.innerText = "翻译失败重试";
+          transTitleBtn.disabled = false;
+        }
+      };
+    }
+
+    // 3. One-click create note (inVault = false)
     if (!item.inVault) {
       const createBtn = actionsEl.createEl("button", {
         cls: "scholar-action-btn scholar-create-btn",
@@ -266,8 +391,8 @@ export class PaperCard {
             .map((a) => `  - "${a}"`)
             .join("\n")}\ndate: "${item.year || ""}"\ndoi: "${item.doi || ""}"\nstatus: 待读\nsource: Scholar-Suite\n---\n\n# ${rawName}\n\n`;
 
-          if (item.abstract) {
-            content += `## 摘要\n\n${item.abstract}\n\n`;
+          if (item.abstractZh || item.abstract) {
+            content += `## 摘要\n\n${item.abstractZh || item.abstract}\n\n`;
           }
 
           const templateFile = app.vault.getAbstractFileByPath(plugin.settings.defaultTemplatePath);
@@ -283,8 +408,7 @@ export class PaperCard {
           new Notice(`已在收件箱创建文献卡片: ${safeTitle}`);
           item.inVault = true;
           item.vaultFile = newFile;
-          badgeEl.className = "scholar-vault-badge scholar-badge-in-vault";
-          badgeEl.innerText = "已在库中";
+          updateBadge();
           createBtn.remove();
           if (onNoteCreated) onNoteCreated(newFile);
         } catch (e: any) {
@@ -293,18 +417,25 @@ export class PaperCard {
       };
     }
 
-    // 3. One-click Save to Zotero
+    // 4. One-click Save to Zotero (Replaces old BibTeX, prominent & smart)
     const zoteroBtn = actionsEl.createEl("button", {
-      cls: "scholar-action-btn scholar-zotero-btn",
-      text: "➕ 存入 Zotero",
+      cls: `scholar-action-btn ${item.inZotero ? "scholar-btn-zotero-saved" : "scholar-zotero-btn"}`,
+      text: item.inZotero ? "✅ Zotero已收" : "➕ 存入 Zotero",
     });
-    zoteroBtn.title = "一键将文献元数据及摘要存入 Zotero 桌面端当前集合";
+    zoteroBtn.title = item.inZotero
+      ? "Zotero 库中已收录此条目（点击可重新推入当前集合）"
+      : "一键将文献元数据及摘要直接存入 Zotero 桌面端当前集合";
+
     zoteroBtn.onclick = async () => {
       zoteroBtn.innerText = "正在存入...";
       zoteroBtn.disabled = true;
       const res = await plugin.zoteroLocalClient.saveItemToZotero(item);
       if (res.success) {
+        item.inZotero = true;
         zoteroBtn.innerText = "✅ 已存 Zotero";
+        zoteroBtn.className = "scholar-action-btn scholar-btn-zotero-saved";
+        zoteroBtn.disabled = false;
+        updateBadge();
         new Notice(`已成功将文献《${item.zhTitle || item.title}》存入 Zotero！`);
       } else {
         zoteroBtn.innerText = "重试存入 Zotero";
@@ -313,20 +444,7 @@ export class PaperCard {
       }
     };
 
-    // 4. Copy BibTeX
-    const copyBibBtn = actionsEl.createEl("button", {
-      cls: "scholar-action-btn",
-      text: "BibTeX",
-    });
-    copyBibBtn.onclick = () => {
-      const firstAuthor = item.authors[0]?.split(" ").pop() || "Author";
-      const citekey = `${firstAuthor}${item.year || "Year"}`;
-      const bib = `@article{${citekey},\n  title={${item.title}},\n  author={${item.authors.join(" and ")}},\n  year={${item.year || ""}},\n  doi={${item.doi || ""}}\n}`;
-      navigator.clipboard.writeText(bib);
-      new Notice("已复制 BibTeX 条目到剪贴板");
-    };
-
-    // 4. Open External Link (DOI / Scholar / CNKI)
+    // 5. Open External Link (DOI / Scholar / CNKI)
     if (item.doi) {
       const doiBtn = actionsEl.createEl("a", {
         cls: "scholar-action-link",

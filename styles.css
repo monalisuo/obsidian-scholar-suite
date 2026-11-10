@@ -1,5 +1,51 @@
 /* Obsidian Scholar Suite Styles */
 
+/* Global Selection & Text Copy Rule (Ensures full drag-select & clipboard copy in Obsidian sidebars) */
+.scholar-reference-view-wrapper,
+.scholar-current-paper-card,
+.scholar-paper-card,
+.scholar-title-wrapper,
+.scholar-paper-title-container,
+.scholar-paper-title,
+.scholar-paper-title-zh,
+.scholar-paper-title-sub,
+.scholar-paper-meta,
+.scholar-current-paper-meta,
+.scholar-current-abstract-box,
+.scholar-abstract-container,
+.scholar-abstract-box,
+.scholar-abstract-text,
+.scholar-issue-preview {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+.scholar-paper-title,
+.scholar-paper-title-zh,
+.scholar-paper-title-sub,
+.scholar-paper-meta,
+.scholar-current-paper-meta,
+.scholar-current-abstract-box,
+.scholar-abstract-text {
+  cursor: text;
+}
+
+.scholar-title-linked {
+  cursor: pointer !important;
+}
+
+.scholar-action-btn,
+.scholar-sub-btn,
+.scholar-tab,
+.scholar-service-pill,
+.scholar-batch-btn,
+.scholar-audit-trigger-btn,
+.scholar-vault-badge,
+.scholar-rank-badge {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
 /* 1. Reference Sidebar View */
 .scholar-reference-view-wrapper {
   padding: 12px;
@@ -162,6 +208,13 @@
   flex: 1;
 }
 
+.scholar-paper-title-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
 .scholar-index-tag {
   font-family: var(--font-monospace);
   font-weight: bold;
@@ -174,6 +227,20 @@
   font-weight: 500;
   color: var(--text-normal);
   line-height: 1.35;
+}
+
+.scholar-paper-title-zh {
+  font-size: 0.94em;
+  font-weight: 600;
+  color: var(--text-normal);
+  line-height: 1.38;
+}
+
+.scholar-paper-title-sub {
+  font-size: 0.82em;
+  color: var(--text-muted);
+  line-height: 1.3;
+  font-style: italic;
 }
 
 .scholar-title-linked {
@@ -202,6 +269,12 @@
 
 .scholar-badge-in-vault:hover {
   opacity: 0.9;
+}
+
+.scholar-badge-zotero {
+  background: rgba(123, 31, 162, 0.16);
+  color: #7b1fa2;
+  border: 1px solid rgba(123, 31, 162, 0.35);
 }
 
 .scholar-badge-missing {
@@ -566,6 +639,25 @@
 .scholar-zotero-btn:hover {
   background: rgba(204, 41, 43, 0.2);
   border-color: #cc292b;
+}
+
+.scholar-btn-zotero-saved {
+  background: rgba(123, 31, 162, 0.12) !important;
+  color: #7b1fa2 !important;
+  border-color: rgba(123, 31, 162, 0.35) !important;
+  font-weight: 500;
+}
+
+.scholar-trans-title-btn {
+  background: rgba(25, 118, 210, 0.08);
+  color: #1976d2;
+  border: 1px solid rgba(25, 118, 210, 0.25);
+  font-weight: 500;
+}
+
+.scholar-trans-title-btn:hover {
+  background: rgba(25, 118, 210, 0.18);
+  border-color: #1976d2;
 }
 
 .scholar-btn-success {
