@@ -1,0 +1,33 @@
+{
+  "name": "obsidian-scholar-suite",
+  "version": "1.0.0",
+  "description": "Zotero-Reference style literature citation graph with vault cross-matching, plus multimodal PDF-to-MD quality review & formatting toolkit.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "academic",
+    "citation",
+    "zotero",
+    "reference",
+    "multimodal",
+    "latex"
+  ],
+  "author": "monalisuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monalisuo/obsidian-scholar-suite.git"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.24.0",
+    "obsidian": "^1.7.2",
+    "tslib": "^2.6.2",
+    "typescript": "^5.4.0"
+  }
+}
