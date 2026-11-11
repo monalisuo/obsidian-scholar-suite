@@ -136,6 +136,7 @@
 /* 2. Tabs */
 .scholar-tabs-container {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   border-bottom: 1px solid var(--background-modifier-border);
   padding-bottom: 6px;
@@ -614,6 +615,54 @@
 
 .scholar-batch-btn:hover {
   background: rgba(123, 31, 162, 0.2);
+}
+
+.scholar-cite-fetch-btn {
+  font-size: 0.82em;
+  padding: 3px 10px;
+  border-radius: 4px;
+  background: rgba(227, 242, 253, 0.9);
+  color: #1976d2;
+  border: 1px solid rgba(25, 118, 210, 0.35);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.scholar-cite-fetch-btn:hover {
+  background: rgba(187, 222, 251, 1);
+  border-color: #1976d2;
+}
+
+.scholar-sciverse-btn {
+  font-size: 0.82em;
+  padding: 3px 10px;
+  border-radius: 4px;
+  background: rgba(147, 51, 234, 0.1);
+  color: #9333ea;
+  border: 1px solid rgba(147, 51, 234, 0.35);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.scholar-sciverse-btn:hover {
+  background: rgba(147, 51, 234, 0.2);
+  border-color: #9333ea;
+}
+
+.scholar-manual-cite-box {
+  margin: 14px 0;
+  display: flex;
+  justify-content: center;
+}
+
+.scholar-query-cnki-btn {
+  font-size: 0.92em;
+  padding: 8px 18px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
 }
 
 .scholar-abstract-source-tag {

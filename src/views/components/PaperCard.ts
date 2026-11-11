@@ -417,26 +417,32 @@ export class PaperCard {
       };
     }
 
-    // 4. One-click Save to Zotero (Replaces old BibTeX, prominent & smart)
+    // 4. One-click Save to Zotero with Full-Text PDF Auto-Attachment
     const zoteroBtn = actionsEl.createEl("button", {
       cls: `scholar-action-btn ${item.inZotero ? "scholar-btn-zotero-saved" : "scholar-zotero-btn"}`,
       text: item.inZotero ? "✅ Zotero已收" : "➕ 存入 Zotero",
     });
     zoteroBtn.title = item.inZotero
-      ? "Zotero 库中已收录此条目（点击可重新推入当前集合）"
-      : "一键将文献元数据及摘要直接存入 Zotero 桌面端当前集合";
+      ? "Zotero 库中已收录此条目（点击可重新探测全文并推入当前集合）"
+      : "一键探测获取全文 PDF 并存入 Zotero 桌面端当前集合（免授权/无弹窗）";
 
     zoteroBtn.onclick = async () => {
-      zoteroBtn.innerText = "正在存入...";
+      zoteroBtn.innerText = "⏳ 检索全文并存入...";
       zoteroBtn.disabled = true;
       const res = await plugin.zoteroLocalClient.saveItemToZotero(item);
       if (res.success) {
         item.inZotero = true;
-        zoteroBtn.innerText = "✅ 已存 Zotero";
-        zoteroBtn.className = "scholar-action-btn scholar-btn-zotero-saved";
+        if (res.hasPdf) {
+          zoteroBtn.innerText = `✅ 已存 Zotero (${res.pdfSizeKb}KB)`;
+          zoteroBtn.className = "scholar-action-btn scholar-btn-zotero-saved";
+          new Notice(`🎉 已成功将《${item.zhTitle || item.title}》及【全文 PDF (${res.pdfSizeKb}KB)】存入 Zotero！`, 6000);
+        } else {
+          zoteroBtn.innerText = "✅ 已存 Zotero (元数据)";
+          zoteroBtn.className = "scholar-action-btn scholar-btn-zotero-saved";
+          new Notice(`已将文献《${item.zhTitle || item.title}》存入 Zotero（未探测到开放全文，已存元数据与摘要）`, 5000);
+        }
         zoteroBtn.disabled = false;
         updateBadge();
-        new Notice(`已成功将文献《${item.zhTitle || item.title}》存入 Zotero！`);
       } else {
         zoteroBtn.innerText = "重试存入 Zotero";
         zoteroBtn.disabled = false;

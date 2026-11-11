@@ -12,7 +12,8 @@ export class ReferenceView extends ItemView {
   currentPaper: ScholarlyPaper | null = null;
   references: ReferenceItem[] = [];
   citations: CitationItem[] = [];
-  activeTab: "references" | "citations" = "references";
+  relatedPapers: CitationItem[] = [];
+  activeTab: "references" | "citations" | "related" = "references";
   isLoading: boolean = false;
   isCurrentAbstractOpen: boolean = false;
   searchQuery: string = "";
@@ -21,6 +22,9 @@ export class ReferenceView extends ItemView {
   batchProgress: string = "";
   isCdpReady: boolean = false;
   isZoteroReady: boolean = false;
+  isFetchingCitations: boolean = false;
+  isFetchingRelated: boolean = false;
+  cnkiDownloadCount?: number;
 
   constructor(leaf: WorkspaceLeaf, plugin: ScholarSuitePlugin) {
     super(leaf);
@@ -61,7 +65,7 @@ export class ReferenceView extends ItemView {
     const fm = cache?.frontmatter;
 
     const title = fm?.title || file.basename;
-    const doi = fm?.doi;
+    let doi = fm?.doi;
 
     this.isLoading = true;
     this.apiStatusNote = "";
@@ -74,6 +78,16 @@ export class ReferenceView extends ItemView {
     try {
       // Step 1: ALWAYS parse local markdown references first (Instant, accurate, offline ground truth)
       const content = await this.app.vault.read(file);
+
+      // Auto-extract DOI from first 60 lines if missing in frontmatter
+      if (!doi) {
+        const firstLines = content.split("\n").slice(0, 60).join("\n");
+        const doiMatch = firstLines.match(/\b(?:DOI[:：\s]*|doi\.org\/)(10\.\d{4,9}\/[-._;()\/:A-Za-z0-9]+)\b/i);
+        if (doiMatch) {
+          doi = doiMatch[1].trim();
+        }
+      }
+
       const localRefs = this.parseLocalMarkdownReferences(content);
 
       // Extract local abstract for the current paper
@@ -86,7 +100,16 @@ export class ReferenceView extends ItemView {
         journal: fm?.journal,
         doi,
         abstract: localAbstract || undefined,
+        citationCount:
+          typeof fm?.citations === "number"
+            ? fm.citations
+            : typeof fm?.cited_by === "number"
+            ? fm.cited_by
+            : undefined,
       };
+      if (typeof fm?.downloads === "number") {
+        this.cnkiDownloadCount = fm.downloads;
+      }
 
       // Asynchronously fetch current paper journal ranks (EasyScholar)
       if (this.currentPaper.journal) {
@@ -102,6 +125,7 @@ export class ReferenceView extends ItemView {
 
       this.references = localRefs;
       this.citations = [];
+      this.relatedPapers = [];
 
       // Batch pre-fetch EasyScholar journal tiers for all references in parallel
       const journalsToQuery = Array.from(
@@ -210,7 +234,11 @@ export class ReferenceView extends ItemView {
       // Step 2: Query Academic APIs for online enrichment and Citations (Cited By)
       // 2A. Query OpenAlex for Citations (Cited By Papers)
       try {
-        const oaResult = await this.plugin.openAlexClient.fetchCitingPapers(identifier || title, title);
+        const oaResult = await this.plugin.openAlexClient.fetchCitingPapers(
+          identifier || title,
+          title,
+          this.currentPaper?.year
+        );
         if (oaResult.citations && oaResult.citations.length > 0) {
           this.citations = oaResult.citations.map((c, idx) => {
             const m = this.plugin.vaultMatcher.match({
@@ -335,6 +363,8 @@ export class ReferenceView extends ItemView {
               doi: item.doi,
               title: item.title,
               zhTitle: item.zhTitle,
+              authors: item.authors,
+              year: item.year,
             });
             if (res.inZotero) {
               item.inZotero = true;
@@ -434,6 +464,14 @@ export class ReferenceView extends ItemView {
       tail = tail.substring(0, appMatch.index);
     }
 
+    // Truncate English Abstract / Keywords at the tail of paper (very common in Chinese journals)
+    const absTailRegex =
+      /\n\s*(?:(?:#{1,6}\s*)?(?:Abstract|ABSTRACT|Key\s*words|Keywords)\s*[:：]|\bAbstract\s*[:：]|\bKeywords\s*[:：])/i;
+    const absTailMatch = absTailRegex.exec(tail);
+    if (absTailMatch) {
+      tail = tail.substring(0, absTailMatch.index);
+    }
+
     // Truncate any subsequent top-level or secondary section headings (e.g. English Abstract, etc.)
     const nextHead = tail.search(/\n#{1,6}\s+[^\n]+/);
     if (nextHead !== -1) {
@@ -441,6 +479,33 @@ export class ReferenceView extends ItemView {
     }
 
     const lines = tail.split("\n");
+
+    const cleanRawText = (raw: string): string => {
+      let r = raw.replace(/\^ref\d+\b/g, "");
+      // Strip trailing paper metadata/abstract from last entry if glued
+      r = r.replace(
+        /\s+(?:\d{3,4}\s*(?:地\s*理\s*学\s*报|经\s*济\s*地\s*理|地\s*理\s*研\s*究|地\s*理\s*科\s*学)|\bSpatial correlation network|\bAbstract\s*[:：]|\bKeywords\s*[:：]).*$/is,
+        ""
+      );
+      // Strip inline journal headers/footers accidentally OCR'ed across pages
+      r = r.replace(
+        /\b\d{2,4}\s*(?:地\s*理\s*学\s*报|经\s*济\s*地\s*理|地\s*理\s*研\s*究|地\s*理\s*科\s*学|[0-9一二三四]\s*期|\b\d{1,3}\s*卷|张军涛\s*等)\b[^\.]*?(?:(?=\s+[A-Za-z\u4e00-\u9fa5\d])|$)/g,
+        " "
+      );
+
+      // Clean bilingual redundancy: Extract [Chinese Original] if present
+      const zhMatch = r.match(/\[([\u4e00-\u9fa5][^\]]{8,})\]/);
+      if (zhMatch) {
+        r = zhMatch[1].trim();
+      }
+
+      // Clean OCR spaces between Chinese characters
+      while (/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/.test(r)) {
+        r = r.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, "$1$2");
+      }
+
+      return r.trim();
+    };
 
     // Strategy 1: Numbered lines with continuation support
     // Matches: [1], [ 1 ], ［1］, [[#^ref1|[1]]], ①, (1), （1）, 1., 1、, - [1], etc.
@@ -459,21 +524,27 @@ export class ReferenceView extends ItemView {
 
       const m = numRegex.exec(line);
       if (m && m[1] && m[2] && m[2].length > 4) {
-        if (currentEntry) numberedMatches.push(currentEntry);
+        if (currentEntry) {
+          currentEntry.raw = cleanRawText(currentEntry.raw);
+          numberedMatches.push(currentEntry);
+        }
         const parsedNum = circledMap[m[1]] || parseInt(m[1], 10) || (numberedMatches.length + 1);
         currentEntry = {
           num: parsedNum,
-          raw: m[2].replace(/\^ref\d+\b/g, "").trim(),
+          raw: m[2],
         };
       } else if (currentEntry) {
-        currentEntry.raw += " " + line.replace(/\^ref\d+\b/g, "").trim();
+        currentEntry.raw += " " + line;
       }
     }
-    if (currentEntry) numberedMatches.push(currentEntry);
+    if (currentEntry) {
+      currentEntry.raw = cleanRawText(currentEntry.raw);
+      numberedMatches.push(currentEntry);
+    }
 
     const paragraphs = tail
       .split(/\n\s*\n/)
-      .map((p) => p.trim())
+      .map((p) => cleanRawText(p))
       .filter((p) => p.length > 25 && !p.startsWith("#") && !p.startsWith("（责任编辑") && !p.startsWith("［责任编辑") && !p.startsWith("责任编辑"));
 
     // Check if numberedMatches is really a numbered list or just accidental line-leading numbers in Author-Year text
@@ -487,6 +558,8 @@ export class ReferenceView extends ItemView {
         const mResult = this.plugin.vaultMatcher.match({
           title: parsed.title,
           zhTitle: parsed.zhTitle,
+          authors: parsed.authors,
+          year: parsed.year,
           raw: item.raw,
         });
 
@@ -553,14 +626,24 @@ export class ReferenceView extends ItemView {
     year?: string;
     journal?: string;
   } {
-    // 0. Quoted title check: Authors (Year) “Title” Journal...
-    const quoteMatch = raw.match(
+    // 0. Pre-cleaning: Protect English abbreviations (U.S., et al.) before dot-splitting
+    let safeRaw = raw
+      .replace(/\bU\s*\.\s*S\s*\./gi, "U_S_")
+      .replace(/\bet\s+al\s*\./gi, "et_al_");
+
+    // Clean redundant spaces between Chinese characters (common in PDF OCR)
+    while (/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/.test(safeRaw)) {
+      safeRaw = safeRaw.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, "$1$2");
+    }
+
+    // 0A. Quoted title check: Authors (Year) “Title” Journal...
+    const quoteMatch = safeRaw.match(
       /^(.*?)\s*\((\d{4}[a-z]?)\)\s*[“"']([^”"']+)[”"'][,.]?\s*(.*?)(?:,\s*(?:volume|vol|\d+|pp|\d+-\d+).*)?$/i
     );
     if (quoteMatch) {
       const qAuthors = quoteMatch[1].split(/[,，]| and /).map((s) => s.trim()).filter(Boolean);
       const qYear = quoteMatch[2];
-      const qTitle = quoteMatch[3].trim();
+      const qTitle = quoteMatch[3].trim().replace(/U_S_/g, "U.S.").replace(/et_al_/g, "et al.");
       const qJournal = quoteMatch[4].split(/[,，]/)[0].trim();
       return {
         displayTitle: qTitle,
@@ -572,11 +655,11 @@ export class ReferenceView extends ItemView {
     }
 
     // 0B. Semicolon-delimited authors (MDPI / Springer format: Author1, A.; Author2, B. Title. Journal Year, Vol, Page.)
-    if (raw.slice(0, 200).includes(";")) {
-      const semiMatch = raw.match(/^(.*?;\s*[^.]+?\.)\s+(.+?\.)\s+(.+?\s+(?:18|19|20)\d{2}.*)$/);
+    if (safeRaw.slice(0, 200).includes(";")) {
+      const semiMatch = safeRaw.match(/^(.*?;\s*[^.]+?\.)\s+(.+?\.)\s+(.+?\s+(?:18|19|20)\d{2}.*)$/);
       if (semiMatch) {
         const sAuthors = semiMatch[1].replace(/\.$/, "").split(";").map((a) => a.trim()).filter(Boolean);
-        const sTitle = semiMatch[2].replace(/\.$/, "").replace(/^["“]|["”]$/g, "").trim();
+        const sTitle = semiMatch[2].replace(/\.$/, "").replace(/^["“]|["”]$/g, "").trim().replace(/U_S_/g, "U.S.").replace(/et_al_/g, "et al.");
         const sRest = semiMatch[3];
         const yMatch = sRest.match(/\b(18|19|20)\d{2}\b/);
         const sYear = yMatch ? yMatch[0] : undefined;
@@ -592,7 +675,7 @@ export class ReferenceView extends ItemView {
     }
 
     // 1. Look for Chinese bracketed citation: [贺灿飞, 朱晟君. 中国产业发展与布局的关联法则. 地理学报, 2020, 75(12): 2684-2698.]
-    const zhBracketMatch = raw.match(/\[([\u4e00-\u9fa5][^\]]+)\]/);
+    const zhBracketMatch = safeRaw.match(/\[([\u4e00-\u9fa5][^\]]+)\]/);
     const zhText = zhBracketMatch ? zhBracketMatch[1] : undefined;
 
     let zhTitle: string | undefined = undefined;
@@ -604,32 +687,31 @@ export class ReferenceView extends ItemView {
       if (zhSegments.length >= 2) {
         zhAuthors = zhSegments[0]
           .split(/[,，、]/)
-          .map((a) => a.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, "$1$2").trim())
+          .map((a) => a.trim())
           .filter(Boolean);
 
         zhTitle = zhSegments[1]
           .replace(/\[\s*[A-Za-z/]+\s*\]|［\s*[A-Za-z/]+\s*］/g, "")
-          .replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, "$1$2")
           .trim();
 
         if (zhSegments.length >= 3) {
           const jMatch = zhSegments[2].split(/[,，]/);
-          zhJournal = jMatch[0].replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, "$1$2").trim();
+          zhJournal = jMatch[0].trim();
         }
       } else {
-        zhTitle = zhText.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, "$1$2").trim();
+        zhTitle = zhText.trim();
       }
     }
 
     // 2. English / Standard GB/T 7714 citation parts (supporting both ASCII . and fullwidth ．)
-    const enText = zhBracketMatch ? raw.substring(0, zhBracketMatch.index).trim() : raw;
+    const enText = zhBracketMatch ? safeRaw.substring(0, zhBracketMatch.index).trim() : safeRaw;
 
     // 2A. Check APA Author-Year format: Author(s). (Year). Title. Journal...
     const apaMatch = enText.match(/^(.*?)\s*\((\d{4}[a-z]?)\)[\.:]?\s+(.+?[\.\?])\s+(.+)$/);
     if (apaMatch) {
       const apaAuthors = apaMatch[1].split(/[,，;&、]|\band\b/i).map((a) => a.trim()).filter(Boolean);
       const apaYear = apaMatch[2];
-      const apaTitle = apaMatch[3].replace(/[\.\?]$/, "").replace(/^["“]|["”]$/g, "").trim();
+      const apaTitle = apaMatch[3].replace(/[\.\?]$/, "").replace(/^["“]|["”]$/g, "").trim().replace(/U_S_/g, "U.S.").replace(/et_al_/g, "et al.");
       const apaRest = apaMatch[4].trim();
       const apaJournal = apaRest.split(/[,，\.\d]/)[0].trim();
       return {
@@ -675,8 +757,10 @@ export class ReferenceView extends ItemView {
       enTitle = enText.replace(/^["“]|["”]$/g, "").trim();
     }
 
+    enTitle = enTitle.replace(/U_S_/g, "U.S.").replace(/et_al_/g, "et al.");
+
     // 3. Extract year
-    const yearMatch = raw.match(/\b(18\d{2}|19\d{2}|20\d{2})\b/);
+    const yearMatch = safeRaw.match(/\b(18\d{2}|19\d{2}|20\d{2})\b/);
     const year = yearMatch ? yearMatch[1] : undefined;
 
     // 4. Clean journal names
@@ -699,7 +783,7 @@ export class ReferenceView extends ItemView {
 
     if (zhTitle && zhTitle.length >= 2) {
       finalTitle = zhTitle;
-      displayTitle = enTitle && enTitle.length > 5 ? `${zhTitle} (${enTitle})` : zhTitle;
+      displayTitle = zhTitle;
     } else {
       finalTitle = enTitle || raw;
       displayTitle = enTitle || raw;
@@ -804,6 +888,22 @@ export class ReferenceView extends ItemView {
     });
     easyScholarPill.title = "EasyScholar 期刊层级与分区 (CSSCI / 北大核心 / CSCD / SSCI / 中科院分区 / IF)";
 
+    // Sciverse Status Pill
+    const isSciverseReady = this.plugin.sciverseClient && this.plugin.sciverseClient.isConfigured();
+    const sciversePill = statusBar.createDiv({
+      cls: `scholar-service-pill ${isSciverseReady ? "service-online" : "service-offline"}`,
+      text: isSciverseReady ? "🟢 Sciverse: 就绪" : "⚪ Sciverse: 未配Key",
+    });
+    sciversePill.title = "Sciverse 全球学术拓扑图谱与语义证据检索（点击立即检索相关文献）";
+    sciversePill.onclick = async () => {
+      if (!isSciverseReady) {
+        new Notice("请先在 Scholar Suite 设置中配置 Sciverse API Key");
+        return;
+      }
+      this.activeTab = "related";
+      await this.runManualSciverseRelatedFetch();
+    };
+
     // 2. Header Card (Current Paper)
     const headerCard = wrapper.createDiv({ cls: "scholar-current-paper-card" });
     headerCard.createEl("h3", { text: this.currentPaper?.title || this.currentFile.basename });
@@ -834,27 +934,40 @@ export class ReferenceView extends ItemView {
       doiEl.target = "_blank";
     }
 
-    if (this.currentPaper?.citationCount !== undefined && this.currentPaper.citationCount > 0) {
+    if (this.currentPaper?.citationCount !== undefined && this.currentPaper.citationCount >= 0) {
       metaLine.createEl("span", {
         cls: "scholar-citation-count-tag",
-        text: `总被引: ${this.currentPaper.citationCount} 次`,
+        text: `🔥 被引: ${this.currentPaper.citationCount} 次`,
       });
     }
 
-    // Save Current Paper to Zotero
+    if (this.cnkiDownloadCount !== undefined && this.cnkiDownloadCount > 0) {
+      metaLine.createEl("span", {
+        cls: "scholar-citation-count-tag",
+        text: `📥 下载: ${this.cnkiDownloadCount} 次`,
+      });
+    }
+
+    // Save Current Paper to Zotero with Full-Text Auto-Attachment
     const currentZoteroBtn = metaLine.createEl("button", {
       cls: "scholar-action-btn scholar-zotero-btn",
       text: "➕ 存入 Zotero",
     });
-    currentZoteroBtn.title = "将本文元数据及摘要存入 Zotero 桌面端";
+    currentZoteroBtn.title = "探测获取全文 PDF 并将本文及附件存入 Zotero 桌面端当前集合";
     currentZoteroBtn.onclick = async () => {
       if (!this.currentPaper) return;
-      currentZoteroBtn.innerText = "正在存入...";
+      currentZoteroBtn.innerText = "⏳ 检索全文并存入...";
       currentZoteroBtn.disabled = true;
       const res = await this.plugin.zoteroLocalClient.saveItemToZotero(this.currentPaper);
       if (res.success) {
-        currentZoteroBtn.innerText = "✅ 已存 Zotero";
-        new Notice(`已成功将本文《${this.currentPaper.title}》存入 Zotero！`);
+        if (res.hasPdf) {
+          currentZoteroBtn.innerText = `✅ 已存 Zotero (${res.pdfSizeKb}KB)`;
+          new Notice(`🎉 已成功将本文《${this.currentPaper.title}》及【全文 PDF (${res.pdfSizeKb}KB)】存入 Zotero！`, 6000);
+        } else {
+          currentZoteroBtn.innerText = "✅ 已存 Zotero (元数据)";
+          new Notice(`已将本文《${this.currentPaper.title}》元数据存入 Zotero！`, 5000);
+        }
+        currentZoteroBtn.disabled = false;
       } else {
         currentZoteroBtn.innerText = "重试存入 Zotero";
         currentZoteroBtn.disabled = false;
@@ -892,6 +1005,49 @@ export class ReferenceView extends ItemView {
       }
     };
 
+    const cleanLinkBtn = headerActions.createEl("button", {
+      cls: "scholar-clean-link-btn",
+      text: "✨ 规范清洗与双链",
+    });
+    cleanLinkBtn.onclick = async () => {
+      if (!this.currentFile) return;
+      const fileContent = await this.app.vault.read(this.currentFile);
+      const res = this.plugin.citationLinker.optimizeCitationLinks(fileContent, {
+        enforceBlankLines: true,
+        stripAbstract: true,
+        cleanBilingual: true,
+      });
+      if (res.changed) {
+        await this.app.vault.modify(this.currentFile, res.optimizedContent);
+        new Notice(
+          `✨ 规范化完成！纯化中文文献 ${res.bilingualCleaned} 篇，切除文末摘要 ${res.abstractStripped ? 1 : 0} 处，注入锚点 ${res.anchorsAdded} 处，正文双链 ${res.linksAdded} 处。`
+        );
+        await this.loadFile(this.currentFile);
+      } else {
+        new Notice("当前文献参考文献格式已完全符合规范，无需改动。");
+      }
+    };
+
+    const cnkiCiteBtn = headerActions.createEl("button", {
+      cls: "scholar-cite-fetch-btn",
+      text: this.isFetchingCitations ? "⏳ 检索知网引证中..." : "🔍 查知网引证与被引",
+    });
+    cnkiCiteBtn.title = "从中国知网 (CNKI) 检索本文的官方被引频次与引证文献网络（施引文献）";
+    cnkiCiteBtn.onclick = async () => {
+      if (this.isFetchingCitations) return;
+      await this.runManualCnkiCitationFetch();
+    };
+
+    const sciverseRelBtn = headerActions.createEl("button", {
+      cls: "scholar-sciverse-btn",
+      text: this.isFetchingRelated ? "⏳ 检索 Sciverse 相关..." : "🔬 查 Sciverse 相关文献",
+    });
+    sciverseRelBtn.title = "通过 Sciverse 图谱拓扑与语义切块，检索与本文高度相关的同侪前沿文献";
+    sciverseRelBtn.onclick = async () => {
+      if (this.isFetchingRelated) return;
+      await this.runManualSciverseRelatedFetch();
+    };
+
     // Batch Fetch Button for ALL papers
     const batchBtn = headerActions.createEl("button", {
       cls: "scholar-batch-btn",
@@ -907,7 +1063,7 @@ export class ReferenceView extends ItemView {
       wrapper.createDiv({ cls: "scholar-status-note", text: this.apiStatusNote });
     }
 
-    // 3. Tab switch (References vs Citations)
+    // 3. Tab switch (References vs Citations vs Related)
     const tabsContainer = wrapper.createDiv({ cls: "scholar-tabs-container" });
     const refInVaultCount = this.references.filter((r) => r.inVault).length;
     const refInZoteroCount = this.references.filter((r) => !r.inVault && r.inZotero).length;
@@ -933,6 +1089,23 @@ export class ReferenceView extends ItemView {
     citeTab.onclick = () => {
       this.activeTab = "citations";
       this.render();
+    };
+
+    const relInVaultCount = this.relatedPapers.filter((p) => p.inVault).length;
+    const relInZoteroCount = this.relatedPapers.filter((p) => !p.inVault && p.inZotero).length;
+    const totalRelInLib = relInVaultCount + relInZoteroCount;
+    const relTab = tabsContainer.createDiv({
+      cls: `scholar-tab ${this.activeTab === "related" ? "active" : ""}`,
+      text: `相关文献 (${this.relatedPapers.length}) [在库: ${totalRelInLib}]`,
+    });
+    relTab.title = `由 Sciverse 强力驱动的相关同侪文献，在库合计 ${totalRelInLib} 篇`;
+    relTab.onclick = async () => {
+      this.activeTab = "related";
+      if (this.relatedPapers.length === 0 && !this.isFetchingRelated) {
+        await this.runManualSciverseRelatedFetch();
+      } else {
+        this.render();
+      }
     };
 
     // 4. Search filter
@@ -993,7 +1166,12 @@ export class ReferenceView extends ItemView {
 
   private renderList(container: HTMLElement): void {
     container.empty();
-    const items = this.activeTab === "references" ? this.references : this.citations;
+    let items: (ReferenceItem | CitationItem)[] = this.references;
+    if (this.activeTab === "citations") {
+      items = this.citations;
+    } else if (this.activeTab === "related") {
+      items = this.relatedPapers;
+    }
 
     const filtered = items.filter((item) => {
       if (!this.searchQuery) return true;
@@ -1012,10 +1190,36 @@ export class ReferenceView extends ItemView {
             ? `暂无外部引证记录（本文发表于 ${year} 年，近发表前沿文献通常需要 1~2 年产生学术引证积累）。`
             : "暂未从开放引证图谱 (OpenAlex / Scopus / S2) 检索到外部施引文献。",
         });
+
+        const manualBtnBox = noCiteDiv.createDiv({ cls: "scholar-manual-cite-box" });
+        const queryCnkiBtn = manualBtnBox.createEl("button", {
+          cls: "mod-cta scholar-query-cnki-btn",
+          text: this.isFetchingCitations ? "⏳ 正在通过中国知网查询真实被引与施引文献..." : "🔍 立即通过知网 (CNKI) 查询真实引证文献与被引频次",
+        });
+        queryCnkiBtn.onclick = async () => {
+          if (this.isFetchingCitations) return;
+          await this.runManualCnkiCitationFetch();
+        };
+
         noCiteDiv.createEl("p", {
           cls: "scholar-subtext",
           text: `💡 提示：点击上方【参考文献 (${this.references.length})】标签页可浏览本论文引用的全部文献、摘要及本地知识库收录状态。`,
         });
+      } else if (this.activeTab === "related") {
+        const noRelDiv = container.createDiv({ cls: "scholar-no-results" });
+        noRelDiv.createEl("p", {
+          text: "暂未加载相关同侪文献。Sciverse 可通过学术共引网络与语义切块向量，秒级为您推荐同类前沿研究。",
+        });
+
+        const manualRelBox = noRelDiv.createDiv({ cls: "scholar-manual-cite-box" });
+        const querySciBtn = manualRelBox.createEl("button", {
+          cls: "mod-cta scholar-query-cnki-btn",
+          text: this.isFetchingRelated ? "⏳ 正在通过 Sciverse 检索相关文献..." : "🔬 立即通过 Sciverse 检索相关同侪文献与切块证据",
+        });
+        querySciBtn.onclick = async () => {
+          if (this.isFetchingRelated) return;
+          await this.runManualSciverseRelatedFetch();
+        };
       } else {
         container.createDiv({
           cls: "scholar-no-results",
@@ -1036,6 +1240,169 @@ export class ReferenceView extends ItemView {
           this.render();
         }
       );
+    }
+  }
+
+  /**
+   * Manual trigger: Fetch Sciverse Related Works & Evidence
+   */
+  public async runManualSciverseRelatedFetch(): Promise<void> {
+    if (!this.currentPaper || !this.currentPaper.title) {
+      new Notice("当前文献缺少标题，无法发起 Sciverse 检索");
+      return;
+    }
+
+    if (!this.plugin.sciverseClient || !this.plugin.sciverseClient.isConfigured()) {
+      new Notice("请先在插件设置中配置 Sciverse API Key");
+      return;
+    }
+
+    this.isFetchingRelated = true;
+    new Notice(`开始通过 Sciverse 检索《${this.currentPaper.title}》的相关同侪文献...`);
+    this.render();
+
+    try {
+      const res = await this.plugin.sciverseClient.fetchRelatedWorks(
+        this.currentPaper.doi,
+        this.currentPaper.title,
+        25
+      );
+
+      if (res.success && res.papers.length > 0) {
+        this.relatedPapers = res.papers.map((p, idx) => {
+          const m = this.plugin.vaultMatcher.match({
+            doi: p.doi,
+            title: p.title,
+          });
+          return {
+            ...p,
+            index: idx + 1,
+            inVault: m.matched,
+            vaultFile: m.file,
+            vaultPath: m.file?.path,
+            vaultTitle: m.file?.basename,
+          };
+        });
+
+        // Batch pre-fetch EasyScholar journal tiers for related papers
+        const onlineJournals = Array.from(
+          new Set(this.relatedPapers.map((r) => r.journal).filter((j): j is string => !!j && j.trim().length >= 2))
+        );
+        if (onlineJournals.length > 0) {
+          Promise.all(
+            onlineJournals.map(async (j) => {
+              const ranks = await this.plugin.easyScholarClient.fetchJournalRanks(j, this.plugin);
+              if (ranks && ranks.length > 0) {
+                for (const item of this.relatedPapers) {
+                  if (item.journal === j) item.journalRanks = ranks;
+                }
+              }
+            })
+          ).then(() => this.render());
+        }
+
+        if (this.isZoteroReady) {
+          this.checkZoteroStatusForItems(this.relatedPapers);
+        }
+
+        this.activeTab = "related";
+        new Notice(`🎉 Sciverse 成功检索到 ${this.relatedPapers.length} 篇相关同侪文献！`);
+      } else {
+        new Notice(`Sciverse 未检索到相关文献: ${res.error || "未知原因"}`);
+      }
+    } catch (e: any) {
+      new Notice(`Sciverse 检索异常: ${e.message}`);
+    } finally {
+      this.isFetchingRelated = false;
+      this.render();
+    }
+  }
+
+  /**
+   * Manual trigger: Fetch official CNKI citation count, download count, and citing papers
+   */
+  public async runManualCnkiCitationFetch(): Promise<void> {
+    if (!this.currentPaper || !this.currentPaper.title) {
+      new Notice("当前文献缺少标题，无法发起知网检索");
+      return;
+    }
+
+    this.isFetchingCitations = true;
+    new Notice(`开始通过中国知网 (CNKI) 检索《${this.currentPaper.title}》的官方被引频次与引证文献...`);
+    this.render();
+
+    try {
+      const res = await this.plugin.cnkiBridge.fetchCnkiCitations(this.currentPaper.title);
+
+      if (res.success) {
+        if (res.citation_count !== undefined) {
+          this.currentPaper.citationCount = res.citation_count;
+        }
+        if (res.download_count !== undefined) {
+          this.cnkiDownloadCount = res.download_count;
+        }
+
+        const rawCites = res.citations || [];
+        const processedCitations: CitationItem[] = [];
+
+        for (let idx = 0; idx < rawCites.length; idx++) {
+          const c = rawCites[idx];
+          const m = this.plugin.vaultMatcher.match({
+            title: c.title,
+            authors: c.authors,
+            year: c.year,
+          });
+          const zMatch = await this.plugin.zoteroLocalClient.checkItemInZotero(c.title);
+
+          processedCitations.push({
+            id: `cnki_cite_${idx + 1}`,
+            index: idx + 1,
+            title: c.title,
+            authors: c.authors,
+            year: c.year,
+            journal: c.journal,
+            citationCount: c.citationCount,
+            inVault: m.matched,
+            vaultFile: m.file,
+            vaultPath: m.file?.path,
+            vaultTitle: m.file?.basename,
+            inZotero: zMatch.exists,
+            zoteroKey: zMatch.key,
+          });
+        }
+
+        this.citations = processedCitations;
+        this.activeTab = "citations";
+
+        // Auto-update Frontmatter with citations and downloads
+        if (this.currentFile && res.citation_count !== undefined) {
+          try {
+            await (this.app as any).fileManager.processFrontMatter(this.currentFile, (fm: any) => {
+              fm.citations = res.citation_count;
+              if (res.download_count) {
+                fm.downloads = res.download_count;
+              }
+              if (res.second_citation_count) {
+                fm.second_citations = res.second_citation_count;
+              }
+            });
+          } catch (fmErr) {
+            console.warn("Update Frontmatter citations warning:", fmErr);
+          }
+        }
+
+        const secCiteText = res.second_citation_count ? `，二级引证: ${res.second_citation_count} 篇` : "";
+        new Notice(
+          `🎉 知网引文网络获取成功！官方权威被引: ${res.citation_count || 0} 次${secCiteText}，施引文献: ${this.citations.length} 篇。`
+        );
+      } else {
+        new Notice(`知网引证检索未完成: ${res.error || "未知原因"}`);
+      }
+    } catch (e: any) {
+      new Notice(`知网引证检索异常: ${e.message}`);
+    } finally {
+      this.isFetchingCitations = false;
+      this.render();
     }
   }
 }

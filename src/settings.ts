@@ -61,6 +61,22 @@ export class ScholarSuiteSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Sciverse API 密钥 (相关文献与切块证据)")
+      .setDesc("配置 Sciverse Bearer Token，驱动相关文献图谱拓扑推荐、语义召回与 MinerU 证据段落挖掘。")
+      .addText((text) =>
+        text
+          .setPlaceholder("输入您的 Sciverse API Key (sci_...)")
+          .setValue(this.plugin.settings.sciverseApiKey)
+          .onChange(async (value) => {
+            this.plugin.settings.sciverseApiKey = value.trim();
+            if (this.plugin.sciverseClient) {
+              this.plugin.sciverseClient.setApiKey(value.trim());
+            }
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("首选学术数据源")
       .setDesc("拉取参考文献与施引文献时的优先接口")
       .addDropdown((dropdown) =>

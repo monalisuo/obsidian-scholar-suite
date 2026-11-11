@@ -135,16 +135,23 @@ export class MultimodalAuditModal extends Modal {
     content = tableRes.convertedContent;
     totalFixed += tableRes.count;
 
-    // 3. Citation Linker
-    const citeRes = this.plugin.citationLinker.optimizeCitationLinks(
-      content,
-      this.plugin.settings.enforceBlankLinesBetweenRefs
-    );
+    // 3. Citation Linker (with Bilingual Clean & Strip Trailing Abstract)
+    const citeRes = this.plugin.citationLinker.optimizeCitationLinks(content, {
+      enforceBlankLines: this.plugin.settings.enforceBlankLinesBetweenRefs,
+      stripAbstract: true,
+      cleanBilingual: true,
+    });
     content = citeRes.optimizedContent;
-    totalFixed += citeRes.linksAdded + citeRes.anchorsAdded;
+    totalFixed +=
+      citeRes.linksAdded +
+      citeRes.anchorsAdded +
+      citeRes.bilingualCleaned +
+      (citeRes.abstractStripped ? 1 : 0);
 
     await this.app.vault.modify(this.targetFile, content);
-    new Notice(`已完成自动修复！累计优化/转换 ${totalFixed} 处元素。`);
+    new Notice(
+      `已完成多模态自动修复！累计优化/转换 ${totalFixed} 处元素（含纯化中文文献 ${citeRes.bilingualCleaned} 篇，截断文末冗余摘要 ${citeRes.abstractStripped ? 1 : 0} 处）。`
+    );
     await this.runAudit();
   }
 }

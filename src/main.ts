@@ -9,12 +9,23 @@ import { ElsevierClient } from "./api/elsevier";
 import { EasyScholarClient } from "./api/easyScholar";
 import { ZoteroLocalClient } from "./api/zoteroLocal";
 import { CnkiBridge } from "./api/cnkiBridge";
+import { SciverseClient } from "./api/sciverse";
 import { MathDoctor } from "./core/mathDoctor";
 import { TableConverter } from "./core/tableConverter";
 import { CitationLinker } from "./core/citationLinker";
 import { PdfAligner } from "./core/pdfAligner";
 import { ReferenceView, VIEW_TYPE_SCHOLAR_REFERENCE } from "./views/ReferenceView";
 import { MultimodalAuditModal } from "./views/MultimodalAuditModal";
+
+export {
+  CitationLinker,
+  MathDoctor,
+  TableConverter,
+  PdfAligner,
+  VaultMatcher,
+  CnkiBridge,
+  ZoteroLocalClient
+};
 
 export default class ScholarSuitePlugin extends Plugin {
   settings: ScholarSuiteSettings = DEFAULT_SETTINGS;
@@ -28,6 +39,7 @@ export default class ScholarSuitePlugin extends Plugin {
   easyScholarClient: EasyScholarClient;
   zoteroLocalClient: ZoteroLocalClient;
   cnkiBridge: CnkiBridge;
+  sciverseClient: SciverseClient;
   mathDoctor: MathDoctor;
   tableConverter: TableConverter;
   citationLinker: CitationLinker;
@@ -45,6 +57,8 @@ export default class ScholarSuitePlugin extends Plugin {
     this.easyScholarClient = new EasyScholarClient(this.settings.easyScholarApiKey);
     this.zoteroLocalClient = new ZoteroLocalClient(this.settings.zoteroPort);
     this.cnkiBridge = new CnkiBridge();
+    this.zoteroLocalClient.setCnkiBridge(this.cnkiBridge);
+    this.sciverseClient = new SciverseClient(this.settings.sciverseApiKey);
     this.mathDoctor = new MathDoctor();
     this.tableConverter = new TableConverter();
     this.citationLinker = new CitationLinker();
@@ -169,6 +183,9 @@ export default class ScholarSuitePlugin extends Plugin {
     }
     if (this.zoteroLocalClient) {
       this.zoteroLocalClient.setPort(this.settings.zoteroPort);
+    }
+    if (this.sciverseClient) {
+      this.sciverseClient.setApiKey(this.settings.sciverseApiKey);
     }
   }
 

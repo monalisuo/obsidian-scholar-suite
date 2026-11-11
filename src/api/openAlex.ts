@@ -185,30 +185,73 @@ export class OpenAlexClient {
 
   /**
    * Helper to verify if the candidate paper title matches the search target
+   * Prevents matching irrelevant papers when searching Chinese / English titles
    */
-  private verifyTitleMatch(query: string, candidateTitle?: string): boolean {
+  private verifyTitleMatch(
+    query: string,
+    candidateTitle?: string,
+    queryYear?: string | number,
+    candidateYear?: string | number
+  ): boolean {
     if (!candidateTitle) return false;
-    const cleanQ = query.toLowerCase().replace(/[^\w\u4e00-\u9fa5]/g, "");
-    const cleanC = candidateTitle.toLowerCase().replace(/[^\w\u4e00-\u9fa5]/g, "");
+    const cleanQ = query.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]/g, "");
+    const cleanC = candidateTitle.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]/g, "");
     if (!cleanQ || !cleanC) return false;
 
-    // Direct containment
-    if (cleanC.includes(cleanQ) || cleanQ.includes(cleanC)) return true;
-
-    // Character / Token overlap
-    const qChars = new Set(cleanQ.split(""));
-    let overlap = 0;
-    for (const ch of cleanC) {
-      if (qChars.has(ch)) overlap++;
+    // Check year if both provided: must not differ by > 1 year
+    if (queryYear && candidateYear) {
+      const y1 = parseInt(String(queryYear).replace(/\D/g, ""), 10);
+      const y2 = parseInt(String(candidateYear).replace(/\D/g, ""), 10);
+      if (!isNaN(y1) && !isNaN(y2) && Math.abs(y1 - y2) > 1) {
+        return false;
+      }
     }
-    const ratio = (overlap * 2) / (cleanQ.length + cleanC.length);
-    return ratio >= 0.45;
+
+    // 1. Direct containment
+    if (cleanQ === cleanC) return true;
+    if (cleanQ.length >= 8 && cleanC.length >= 8) {
+      if (cleanC.includes(cleanQ) || cleanQ.includes(cleanC)) return true;
+    }
+
+    // 2. Chinese Title: check longest contiguous common substring
+    const isChinese = /[\u4e00-\u9fa5]/.test(cleanQ);
+    if (isChinese) {
+      let maxLcs = 0;
+      for (let i = 0; i < cleanQ.length; i++) {
+        for (let j = i + 5; j <= cleanQ.length; j++) {
+          const sub = cleanQ.substring(i, j);
+          if (cleanC.includes(sub)) {
+            if (sub.length > maxLcs) maxLcs = sub.length;
+          } else {
+            break;
+          }
+        }
+      }
+      const ratio = maxLcs / cleanQ.length;
+      return ratio >= 0.70;
+    }
+
+    // 3. English Title: Token Overlap
+    const STOP = new Set(["the", "and", "for", "that", "this", "with", "from", "are", "was"]);
+    const wordsQ = query.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length >= 3 && !STOP.has(w));
+    const wordsC = candidateTitle.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length >= 3 && !STOP.has(w));
+    if (wordsQ.length >= 3 && wordsC.length >= 3) {
+      const setQ = new Set(wordsQ);
+      let shared = 0;
+      for (const w of wordsC) {
+        if (setQ.has(w)) shared++;
+      }
+      const overlap = (shared * 2) / (wordsQ.length + wordsC.length);
+      return shared >= 3 && overlap >= 0.75;
+    }
+
+    return false;
   }
 
   /**
    * Fetch papers citing this work from OpenAlex
    */
-  public async fetchCitingPapers(doiOrTitle: string, title?: string): Promise<{
+  public async fetchCitingPapers(doiOrTitle: string, title?: string, year?: string | number): Promise<{
     totalCount: number;
     citations: CitationItem[];
   }> {
@@ -241,16 +284,16 @@ export class OpenAlexClient {
           .trim();
         if (searchTitle.length >= 3) {
           const firstWords = searchTitle.split(" ").slice(0, 10).join(" ");
-          const url = `https://api.openalex.org/works?search=${encodeURIComponent(firstWords)}&per-page=3&mailto=scholar-suite@obsidian.md`;
+          const url = `https://api.openalex.org/works?search=${encodeURIComponent(firstWords)}&per-page=5&mailto=scholar-suite@obsidian.md`;
           const res = await requestUrl({
             url,
             method: "GET",
             headers: { "User-Agent": "ScholarSuite/1.0.0 (mailto:scholar-suite@obsidian.md)" },
           });
           if (res.status === 200 && Array.isArray(res.json?.results) && res.json.results.length > 0) {
-            // Find first result that matches title similarity
+            // Find first result that strictly matches title similarity
             for (const cand of res.json.results) {
-              if (this.verifyTitleMatch(rawSearch, cand.title)) {
+              if (this.verifyTitleMatch(rawSearch, cand.title, year, cand.publication_year)) {
                 workId = cand.id.split("/").pop() || null;
                 totalCited = cand.cited_by_count || 0;
                 break;

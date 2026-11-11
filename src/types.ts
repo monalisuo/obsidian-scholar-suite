@@ -113,6 +113,7 @@ export interface ScholarSuiteSettings {
   semanticScholarApiKey: string;
   elsevierApiKey: string;
   easyScholarApiKey: string;
+  sciverseApiKey: string;
   preferredApi: "semanticscholar" | "crossref" | "openalex";
   defaultTemplatePath: string;
   zoteroPort: number;
@@ -128,6 +129,7 @@ export const DEFAULT_SETTINGS: ScholarSuiteSettings = {
   semanticScholarApiKey: "",
   elsevierApiKey: "",
   easyScholarApiKey: "",
+  sciverseApiKey: "",
   preferredApi: "semanticscholar",
   defaultTemplatePath: "模板/论文精读模板.md",
   zoteroPort: 23119,
