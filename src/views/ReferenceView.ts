@@ -481,7 +481,7 @@ export class ReferenceView extends ItemView {
     const lines = tail.split("\n");
 
     const cleanRawText = (raw: string): string => {
-      let r = raw.replace(/\^ref\d+\b/g, "");
+      let r = raw.replace(/\^ref\d+\b/g, "").trim();
       // Strip trailing paper metadata/abstract from last entry if glued
       r = r.replace(
         /\s+(?:\d{3,4}\s*(?:地\s*理\s*学\s*报|经\s*济\s*地\s*理|地\s*理\s*研\s*究|地\s*理\s*科\s*学)|\bSpatial correlation network|\bAbstract\s*[:：]|\bKeywords\s*[:：]).*$/is,
@@ -493,16 +493,57 @@ export class ReferenceView extends ItemView {
         " "
       );
 
-      // Clean bilingual redundancy: Extract [Chinese Original] if present
-      const zhMatch = r.match(/\[([\u4e00-\u9fa5][^\]]{8,})\]/);
-      if (zhMatch) {
-        r = zhMatch[1].trim();
+      const zhChars = (r.match(/[\u4e00-\u9fa5]/g) || []).length;
+
+      // 1) 样式 A: 前置英文翻译，后置括号包裹中文条目
+      const prefixZhMatch = r.match(/^([A-Za-z\s,.\-–—:;0-9/&\'\"`\(\)]+?)\s*[\[\uFF3B]([\u4e00-\u9fa5].*)[\]\uFF3D]\s*$/);
+      if (prefixZhMatch) {
+        const enPrefix = prefixZhMatch[1].trim();
+        const zhContent = prefixZhMatch[2].trim();
+        const zhCount = (zhContent.match(/[\u4e00-\u9fa5]/g) || []).length;
+        if (/[A-Za-z]{4,}/.test(enPrefix) && !/[\u4e00-\u9fa5]/.test(enPrefix) && zhCount >= 4) {
+          r = zhContent;
+        }
+      }
+
+      // 2) 样式 B: 后置语言标注 (in Chinese), [in Chinese with English abstract], （in Chinese）等
+      const inChineseRegex = /\s*[\(\[（［【]\s*(?:in\s+Chinese(?:\s+with\s+English\s+(?:abstract|summary))?|in\s+English|[\u4e00-\u9fa5]*中文版?)\s*[\)\]）］】]\s*$/i;
+      if (inChineseRegex.test(r)) {
+        r = r.replace(inChineseRegex, "").trim();
+      }
+
+      // 3) 样式 C: 中文在前，后置附带英文对照翻译（带方括号/圆括号）
+      if (zhChars >= 4) {
+        const suffixBracketMatch = r.match(/\s*([\[\uFF3B\(（【]\s*[A-Za-z]{2,}[\s\S]*?[\]\uFF3D\)）】])\s*$/);
+        if (suffixBracketMatch) {
+          const bracketFull = suffixBracketMatch[1].trim();
+          const beforeBracket = r.substring(0, suffixBracketMatch.index).trim();
+          const zhBefore = (beforeBracket.match(/[\u4e00-\u9fa5]/g) || []).length;
+          const enLetterCount = (bracketFull.match(/[A-Za-z]/g) || []).length;
+          if (!/[\u4e00-\u9fa5]/.test(bracketFull) && enLetterCount >= 10 && zhBefore >= 4) {
+            r = beforeBracket;
+          }
+        }
+      }
+
+      // 4) 样式 D: 中文在前，后置附带英文对照翻译（无括号裸露追加）
+      if (zhChars >= 4) {
+        const bareEnMatch = r.match(/([\u4e00-\u9fa5][^\n]+?(?:\d{4}|\d+[-–—~]\d+|\d+期|\d+卷)[\.。,，]\s*)([A-Z][A-Za-z\s,.\-–—:;0-9/&\'\"`\(\)]+)$/);
+        if (bareEnMatch) {
+          const trailing = bareEnMatch[2].trim();
+          if (trailing.length >= 15 && !/[\u4e00-\u9fa5]/.test(trailing)) {
+            r = r.substring(0, r.length - trailing.length).trim();
+          }
+        }
       }
 
       // Clean OCR spaces between Chinese characters
       while (/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/.test(r)) {
         r = r.replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, "$1$2");
       }
+
+      // Strip trailing loose punctuation
+      r = r.replace(/[.。,，;；]\s*$/, "").trim();
 
       return r.trim();
     };
@@ -1382,18 +1423,14 @@ export class ReferenceView extends ItemView {
               if (res.download_count) {
                 fm.downloads = res.download_count;
               }
-              if (res.second_citation_count) {
-                fm.second_citations = res.second_citation_count;
-              }
             });
           } catch (fmErr) {
             console.warn("Update Frontmatter citations warning:", fmErr);
           }
         }
 
-        const secCiteText = res.second_citation_count ? `，二级引证: ${res.second_citation_count} 篇` : "";
         new Notice(
-          `🎉 知网引文网络获取成功！官方权威被引: ${res.citation_count || 0} 次${secCiteText}，施引文献: ${this.citations.length} 篇。`
+          `🎉 知网引文网络获取成功！官方权威被引: ${res.citation_count || 0} 次，施引文献: ${this.citations.length} 篇。`
         );
       } else {
         new Notice(`知网引证检索未完成: ${res.error || "未知原因"}`);

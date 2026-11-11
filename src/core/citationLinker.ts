@@ -64,26 +64,6 @@ export class CitationLinker {
     let cleaned = rawRest.trim();
     cleaned = cleaned.replace(/\^ref\d+\b/g, "").trim();
 
-    let isBilingualCleaned = false;
-    if (cleanBilingual) {
-      // 风格 1: 英文在前，中文在后 [中文作者. 中文篇名...]
-      const zhMatch = cleaned.match(/[\[\uFF3B]([\u4e00-\u9fa5][^\]\uFF3D]{7,})[\]\uFF3D]/);
-      if (zhMatch && /[a-zA-Z]{4,}/.test(cleaned.substring(0, zhMatch.index))) {
-        cleaned = zhMatch[1].trim();
-        isBilingualCleaned = true;
-      } else {
-        // 风格 2: 中文在前，英文在后 [English Authors...]
-        const enBracket = cleaned.match(/[\[\uFF3B]([A-Za-z\s,.\-–—:;0-9/&\'\"`\(\)]+)[\]\uFF3D]\s*$/);
-        if (enBracket && /[\u4e00-\u9fa5]{4,}/.test(cleaned.substring(0, enBracket.index))) {
-          cleaned = cleaned.substring(0, enBracket.index).trim();
-          isBilingualCleaned = true;
-        }
-      }
-    }
-
-    // Clean OCR spaces between Chinese characters
-    cleaned = this.cleanChineseSpaces(cleaned);
-
     // Strip inline/trailing OCR cross-page header/footer
     cleaned = cleaned
       .replace(
@@ -91,6 +71,65 @@ export class CitationLinker {
         ""
       )
       .trim();
+
+    let isBilingualCleaned = false;
+    if (cleanBilingual) {
+      const zhChars = (cleaned.match(/[\u4e00-\u9fa5]/g) || []).length;
+
+      // 1) 样式 A: 前置英文翻译，后置括号包裹中文条目
+      // 例: Chen Xian... [陈宪, 黄建锋. 分工... 数量经济技术经济研究, 2004(10): 65-71.]
+      const prefixZhMatch = cleaned.match(/^([A-Za-z\s,.\-–—:;0-9/&\'\"`\(\)]+?)\s*[\[\uFF3B]([\u4e00-\u9fa5].*)[\]\uFF3D]\s*$/);
+      if (prefixZhMatch) {
+        const enPrefix = prefixZhMatch[1].trim();
+        const zhContent = prefixZhMatch[2].trim();
+        const zhCount = (zhContent.match(/[\u4e00-\u9fa5]/g) || []).length;
+        if (/[A-Za-z]{4,}/.test(enPrefix) && !/[\u4e00-\u9fa5]/.test(enPrefix) && zhCount >= 4) {
+          cleaned = zhContent;
+          isBilingualCleaned = true;
+        }
+      }
+
+      // 2) 样式 B: 后置语言标注 (in Chinese), [in Chinese with English abstract], （in Chinese）等
+      const inChineseRegex = /\s*[\(\[（［【]\s*(?:in\s+Chinese(?:\s+with\s+English\s+(?:abstract|summary))?|in\s+English|[\u4e00-\u9fa5]*中文版?)\s*[\)\]）］】]\s*$/i;
+      if (inChineseRegex.test(cleaned)) {
+        cleaned = cleaned.replace(inChineseRegex, "").trim();
+        isBilingualCleaned = true;
+      }
+
+      // 3) 样式 C: 中文在前，后置附带英文对照翻译（带方括号/圆括号）
+      // 例: 陈宪, 黄建锋... 2004(10): 65-71. [Chen Xian, Huang Jianfeng... Quantitative & Technical Economics, 2004(10): 65-71.]
+      if (zhChars >= 4) {
+        const suffixBracketMatch = cleaned.match(/\s*([\[\uFF3B\(（【]\s*[A-Za-z]{2,}[\s\S]*?[\]\uFF3D\)）】])\s*$/);
+        if (suffixBracketMatch) {
+          const bracketFull = suffixBracketMatch[1].trim();
+          const beforeBracket = cleaned.substring(0, suffixBracketMatch.index).trim();
+          const zhBefore = (beforeBracket.match(/[\u4e00-\u9fa5]/g) || []).length;
+          const enLetterCount = (bracketFull.match(/[A-Za-z]/g) || []).length;
+          if (!/[\u4e00-\u9fa5]/.test(bracketFull) && enLetterCount >= 10 && zhBefore >= 4) {
+            cleaned = beforeBracket;
+            isBilingualCleaned = true;
+          }
+        }
+      }
+
+      // 4) 样式 D: 中文在前，后置附带英文对照翻译（无括号裸露追加）
+      if (zhChars >= 4) {
+        const bareEnMatch = cleaned.match(/([\u4e00-\u9fa5][^\n]+?(?:\d{4}|\d+[-–—~]\d+|\d+期|\d+卷)[\.。,，]\s*)([A-Z][A-Za-z\s,.\-–—:;0-9/&\'\"`\(\)]+)$/);
+        if (bareEnMatch) {
+          const trailing = bareEnMatch[2].trim();
+          if (trailing.length >= 15 && !/[\u4e00-\u9fa5]/.test(trailing)) {
+            cleaned = cleaned.substring(0, cleaned.length - trailing.length).trim();
+            isBilingualCleaned = true;
+          }
+        }
+      }
+    }
+
+    // Clean OCR spaces between Chinese characters
+    cleaned = this.cleanChineseSpaces(cleaned);
+
+    // Strip trailing loose punctuation
+    cleaned = cleaned.replace(/[.。,，;；]\s*$/, "").trim();
 
     return { cleaned, isBilingualCleaned };
   }
